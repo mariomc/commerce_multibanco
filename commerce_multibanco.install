@@ -1,0 +1,77 @@
+<?php
+
+/**
+ * @file
+ * Install file for commerce_multibanco.module.
+ */
+/**
+ * Implements hook_requirements().
+ */
+function commerce_multibanco_requirements($phase) {
+  $requirements = array();
+ 
+  return $requirements;
+}
+/**
+ * Implements hook_schema().
+ */
+function commerce_multibanco_schema() {
+  $schema = array();
+
+  $schema['commerce_multibanco'] = array(
+    'description' => 'Logs the Multibanco references.',
+    'fields' => array(
+      'order_id' => array(
+        'description' => 'The order ID.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'entity' => array(
+        'description' => 'The MB entity.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'value' => array(
+        'description' => 'The MB value.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'reference' => array(
+        'description' => 'The MB reference.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'received' => array(
+        'description' => 'If the reference was paid.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'indexes' => array(
+      'order_id' => array('order_id'),
+    ),
+  );
+
+  return $schema;
+}
+
+
+/**
+ * Implements hook_uninstall().
+ */
+function commerce_multibanco_uninstall() {
+  db_delete('variable')
+  ->condition('name', 'commerce_multibanco_%%', 'LIKE')
+  ->execute();
+}
+

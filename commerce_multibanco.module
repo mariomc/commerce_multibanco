@@ -1,0 +1,196 @@
+<?php
+
+/**
+ * @file
+ * Provides a payment method using Ifthen Software multibanco platform.
+ */
+
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_multibanco_commerce_payment_method_info() {
+  $payment_methods = array();
+  $payment_methods['commerce_multibanco'] = array(
+    'title' => t('Multibanco'),
+    'description' => t('Ifthen Multibanco payment gateway integration.'),
+  );
+
+  return $payment_methods;
+}
+
+/**
+* Returns the default settings for the Ifthen Software payment method.
+*/
+function commerce_multibanco_default_settings() {
+  $default_currency = variable_get('commerce_default_currency', 'EUR');
+
+  return array(
+    'commerce_multibanco_entidade' => '',
+    'commerce_multibanco_subentidade' => '',
+  );
+}
+
+/**
+* Payment method callback: settings form.
+*/
+function commerce_multibanco_settings_form($settings = NULL) {
+  $settings += commerce_multibanco_default_settings();
+
+  $form = array();
+
+  $form['commerce_multibanco_entidade'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Entidade'),
+    '#default_value' => $settings['commerce_multibanco_entidade'],
+  	'#required' => TRUE,
+  );
+  $form['commerce_multibanco_subentidade'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Sub-Entidade'),
+    '#default_value' => $settings['commerce_multibanco_subentidade'],
+  	'#required' => TRUE,
+  );
+
+  return $form;
+}
+
+/**
+ * Payment method callback: submit form.
+ */
+function commerce_multibanco_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  $form = array();
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+  $total = $wrapper->commerce_order_total->amount->value();
+  $currency_code = $wrapper->commerce_order_total->currency_code->value();
+  $ref = GenerateMbRef($payment_method['settings']['commerce_multibanco_entidade'], $payment_method['settings']['commerce_multibanco_subentidade'], $order->order_id, commerce_currency_amount_to_decimal($total, $currency_code));
+  $variables = array(
+    'commerce_multibanco' => array(
+      'payment_method' => $payment_method,
+      'pane_values' => $pane_values,
+      'checkout_pane' => $checkout_pane,
+      'order' => $order,
+      'ref' => $ref,
+    )
+  ); 
+  //drupal_add_js($variables, 'setting');
+  // Merge in values from the order.
+  if (!empty($order->data['commerce_multibanco'])) {
+    $pane_values += $order->data['commerce_multibanco'];
+  }
+  $header = array(
+    t('Entity'),
+    t('Reference'),
+    t('Value'),
+  );
+  $rows[] = array($ref['ent_id'], $ref['reference'], $ref['raw_value'] . $currency_code);
+  $form['payment_description'] = array(
+     '#markup' => theme('table', array(
+      'header' => $header,
+      'rows' => $rows,
+      'attributes' => array('class' => array('commerce_mb_ref_table')),
+    )), 
+  );
+  return $form;
+}
+
+/**
+ * Payment method callback: submit form submission.
+ */
+function commerce_multibanco_submit_form_submit($payment_method, $pane_form, $pane_values, $order, $charge) {
+  $order->data['commerce_multibanco'] = $pane_values;
+  commerce_multibanco_transaction($payment_method, $order, $charge, $pane_values['name']);
+}
+//INICIO REF MULTIBANCO
+function GenerateMbRef($ent_id, $subent_id, $order_id, $order_value)
+{
+  $original_value = $order_value;
+  $return['success'] = TRUE;
+  $return['message'] = "";
+  if(strlen($ent_id)!=5){
+      $return['message'] = t("Invalid entity");
+      $return['success'] = FALSE;
+      return $return;
+  }
+  if(strlen($subent_id)==0 || strlen($subent_id)>3){
+    $return['message'] = t("Invalid sub-entity");
+    $return['success'] = FALSE;
+    return $return;
+  }
+  if ($order_value < 1){
+    $return['success'] = FALSE;
+    $return['message'] = t('Order value too low.');
+    return $return;
+  }
+  if ($order_value >= 1000000){
+    $return['success'] = FALSE;
+    $return['message'] = t('Order value too high.');
+    return $return;
+  }
+  $subent_id = str_pad($subent_id, 3, "0", STR_PAD_LEFT);
+  $chk_val = 0;
+  $order_id = str_pad($order_id, 4, "0", STR_PAD_LEFT);
+  //$order_value= sprintf("%01.2f", $order_value);
+  //$order_value =  commerce_currency_amount_to_decimal($order_value);
+  //check digit calculation
+  $chk_str = sprintf('%05u%03u%04u%08u', $ent_id, $subent_id, $order_id, round($order_value*100));
+  $chk_array = array(3, 30, 9, 90, 27, 76, 81, 34, 49, 5, 50, 15, 53, 45, 62, 38, 89, 17, 73, 51);
+  for ($i = 0; $i < 20; $i++){
+    $chk_int = substr($chk_str, 19-$i, 1);
+    $chk_val += ($chk_int%10)*$chk_array[$i];
+  }
+  $chk_val %= 97;
+  $chk_digits = sprintf('%02u', 98-$chk_val);
+  $return['reference'] = $subent_id." ".substr($chk_str, 8, 3)." ".substr($chk_str, 11, 1).$chk_digits;
+  $return['message'] = $return['reference'];
+  $return['raw_value'] = $original_value; 
+  $return['formatted_value'] = $order_value;
+  $return['ent_id'] = $ent_id;
+  $return['subent_id'] = $subent_id;
+  return $return;
+}
+
+/**
+ * Creates an example payment transaction for the specified charge amount.
+ *
+ * @param $payment_method
+ *   The payment method instance object used to charge this payment.
+ * @param $order
+ *   The order object the payment applies to.
+ * @param $charge
+ *   An array indicating the amount and currency code to charge.
+ * @param $name
+ *   The name entered on the submission form.
+ */
+function commerce_multibanco_transaction($payment_method, $order, $charge, $name) {
+  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+  // Prepare the billing address for use in the request.
+  $billing_address = $order_wrapper->commerce_customer_billing->commerce_customer_address->value();
+  $payment_method['settings'] += commerce_multibanco_default_settings();
+  $ref = GenerateMbRef($payment_method['settings']['commerce_multibanco_entidade'], $payment_method['settings']['commerce_multibanco_subentidade'], $order->order_id, commerce_currency_amount_to_decimal($charge['amount'], $charge['currency_code']));
+  $reference = $ref['message'];
+  $transaction = commerce_payment_transaction_new('commerce_multibanco', $order->order_id);
+  $transaction->instance_id = $payment_method['instance_id'];
+  $transaction->amount = $charge['amount'];
+  $transaction->currency_code = $charge['currency_code'];
+  $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;  
+  $transaction->message = 'Name: @name | Entity: @entity | Value: @value | MB Reference: @reference';
+  $transaction->message_variables = array(
+    '@name' => $billing_address['name_line'],
+    '@entity' => $payment_method['settings']['commerce_multibanco_entidade'],
+    '@value' => commerce_currency_amount_to_decimal($charge['amount'], $charge['currency_code']),
+    '@reference' => $reference,
+    );
+
+  commerce_payment_transaction_save($transaction);
+  
+  $data = array(
+      'order_id' => $order->order_id,
+      'entity' => $payment_method['settings']['commerce_multibanco_entidade'],
+      'value' => commerce_currency_amount_to_decimal($charge['amount'], $charge['currency_code']),
+      'reference' => $reference,
+  );
+  
+  drupal_write_record('commerce_multibanco', $data);
+}
+
